@@ -310,8 +310,42 @@ const App: React.FC = () => {
 
     console.log('🎤 Local stream obtained:', localStreamRef.current.getTracks());
 
-    // Initialize Peer with enhanced TURN + STUN Config
-    const peer = new Peer(id ? id : undefined, PEER_CONFIG);
+    // CRITICAL: Fetch fresh TURN credentials from Metered.ca REST API
+    console.log('🔄 Fetching TURN credentials from Metered.ca...');
+    let iceServers: any[] = [];
+
+    try {
+      const response = await fetch(
+        "https://hzaid01.metered.live/api/v1/turn/credentials?apiKey=b974fb4a154c3a4e56cd6f85ab7e9525f09e"
+      );
+
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}`);
+      }
+
+      iceServers = await response.json();
+      console.log('✅ TURN credentials fetched successfully:', iceServers);
+    } catch (error) {
+      console.error('❌ Failed to fetch TURN credentials:', error);
+      // Fallback to basic STUN if API fails
+      iceServers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ];
+      console.log('⚠️ Using fallback STUN servers');
+    }
+
+    // Initialize Peer with dynamically fetched TURN credentials
+    const peerConfig = {
+      config: {
+        iceServers: iceServers,
+        iceTransportPolicy: 'all',
+        iceCandidatePoolSize: 10
+      },
+      debug: 3
+    };
+
+    const peer = new Peer(id ? id : undefined, peerConfig);
     peerRef.current = peer;
 
     peer.on('error', (err) => {
