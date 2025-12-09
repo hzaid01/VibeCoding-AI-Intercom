@@ -475,6 +475,58 @@ const App: React.FC = () => {
       logIceCandidate(event.candidate);
     });
 
+    // CRITICAL: Monitor ICE connection state for stability
+    call.peerConnection.addEventListener('iceconnectionstatechange', () => {
+      const state = call.peerConnection.iceConnectionState;
+      console.log('🔌 ICE Connection State:', state);
+
+      switch (state) {
+        case 'connected':
+        case 'completed':
+          setConnectionStatus('Connected');
+          setStatusText('Connected - Audio active');
+          console.log('✅ ICE connection established successfully');
+          break;
+        case 'checking':
+          setConnectionStatus('Connecting');
+          setStatusText('Checking connection...');
+          break;
+        case 'disconnected':
+          // Temporary disconnect - wait for recovery
+          setConnectionStatus('Connecting');
+          setStatusText('Connection interrupted - recovering...');
+          console.log('⚠️ ICE disconnected - waiting for automatic recovery...');
+          break;
+        case 'failed':
+          console.error('❌ ICE connection failed - attempting ICE restart');
+          setConnectionStatus('Connecting');
+          setStatusText('Connection failed - restarting...');
+          // Attempt ICE restart
+          try {
+            call.peerConnection.restartIce();
+            console.log('🔄 ICE restart initiated');
+          } catch (e) {
+            console.error('❌ ICE restart failed:', e);
+          }
+          break;
+        case 'closed':
+          console.log('🔒 ICE connection closed');
+          setConnectionStatus('Disconnected');
+          break;
+      }
+    });
+
+    // Monitor connection state as well
+    call.peerConnection.addEventListener('connectionstatechange', () => {
+      const state = call.peerConnection.connectionState;
+      console.log('📡 Connection State:', state);
+
+      if (state === 'failed') {
+        console.error('❌ Peer connection failed');
+        setStatusText('Connection failed. Please rejoin.');
+      }
+    });
+
     call.on('stream', (remoteStream) => {
       console.log('✅ Received remote stream:', remoteStream);
       console.log('🔊 Remote audio tracks:', remoteStream.getAudioTracks());
@@ -497,12 +549,16 @@ const App: React.FC = () => {
     });
 
     call.on('close', () => {
-      console.log('❌ Call closed');
-      endCall();
+      console.log('⚠️ Call close event received');
+      // Don't immediately end - check if this was intentional
+      // The ICE state handler will manage connection status
+      setConnectionStatus('Disconnected');
+      setStatusText('Peer disconnected');
     });
 
     call.on('error', (err) => {
       console.error('❌ Call error:', err);
+      setStatusText(`Call error: ${err.message || 'Unknown error'}`);
     });
   };
 
