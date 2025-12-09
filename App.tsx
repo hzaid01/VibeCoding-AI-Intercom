@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Peer, MediaConnection } from 'peerjs';
-import { AppState } from './types';
+import { Peer, MediaConnection, DataConnection } from 'peerjs';
+import { AppState, TranscriptionItem } from './types';
 import { LandingScreen } from './views/LandingScreen';
 import { CallScreen } from './views/CallScreen';
 import { SummaryScreen } from './views/SummaryScreen';
@@ -13,10 +14,14 @@ const App: React.FC = () => {
   const [isDeaf, setIsDeaf] = useState(false);
   const [statusText, setStatusText] = useState('');
   
+  // Shared State
+  const [transcripts, setTranscripts] = useState<TranscriptionItem[]>([]);
+  
   // Refs for WebRTC management
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const activeCallRef = useRef<MediaConnection | null>(null);
+  const dataConnRef = useRef<DataConnection | null>(null);
   
   // Audio element for remote stream
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -43,11 +48,15 @@ const App: React.FC = () => {
     if (activeCallRef.current) {
       activeCallRef.current.close();
     }
+    if (dataConnRef.current) {
+      dataConnRef.current.close();
+    }
     if (peerRef.current) {
       peerRef.current.destroy();
     }
     peerRef.current = null;
     activeCallRef.current = null;
+    dataConnRef.current = null;
   };
 
   const endCall = () => {
@@ -59,6 +68,7 @@ const App: React.FC = () => {
       setAppState(AppState.LANDING);
       setChannelId('');
       setStatusText('');
+      setTranscripts([]);
   };
 
   const initializePeer = async (id: string | null = null): Promise<Peer> => {
@@ -86,6 +96,38 @@ const App: React.FC = () => {
     return peer;
   };
 
+  // Handle incoming data (transcripts) from the peer
+  const setupDataConnection = (conn: DataConnection) => {
+    dataConnRef.current = conn;
+    
+    conn.on('open', () => {
+        console.log("Data connection established");
+    });
+
+    conn.on('data', (data: any) => {
+        if (data && data.type === 'TRANSCRIPT') {
+            const remoteItem = data.payload;
+            setTranscripts(prev => {
+                // Check if we need to update an existing non-final item or add new
+                const lastItem = prev[prev.length - 1];
+                // Note: Logic here is simplified. In a real app we might match IDs.
+                // Assuming simple append for now or checking if the last item was also remote and non-final
+                
+                // If the incoming data has the same ID as the last remote message, update it
+                const existingIndex = prev.findIndex(t => t.id === remoteItem.id);
+                
+                if (existingIndex !== -1) {
+                    const updated = [...prev];
+                    updated[existingIndex] = { ...remoteItem, sender: 'remote' };
+                    return updated;
+                } else {
+                    return [...prev, { ...remoteItem, sender: 'remote' }];
+                }
+            });
+        }
+    });
+  };
+
   const handleCreateHost = async () => {
     setAppState(AppState.INITIALIZING);
     setStatusText("Initializing Secure Channel...");
@@ -102,11 +144,16 @@ const App: React.FC = () => {
         setStatusText("Waiting for Guest...");
       });
 
+      // Handle Incoming Audio Call
       peer.on('call', (call) => {
-        // Answer automatically
         setStatusText("Establishing Link...");
         call.answer(localStreamRef.current!);
         handleCallStream(call);
+      });
+
+      // Handle Incoming Data Connection (for Chat/Transcript)
+      peer.on('connection', (conn) => {
+        setupDataConnection(conn);
       });
 
     } catch (e) {
@@ -124,8 +171,14 @@ const App: React.FC = () => {
 
       peer.on('open', () => {
         setStatusText("Handshaking...");
+        
+        // Initiate Audio Call
         const call = peer.call(targetId, localStreamRef.current!);
         handleCallStream(call);
+
+        // Initiate Data Connection
+        const conn = peer.connect(targetId);
+        setupDataConnection(conn);
       });
 
     } catch (e) {
@@ -147,6 +200,45 @@ const App: React.FC = () => {
 
     call.on('close', () => {
       endCall();
+    });
+  };
+
+  const handleLocalTranscript = (text: string, isFinal: boolean) => {
+    const id = Date.now().toString(); // Simple ID generation
+    
+    // Update Local State
+    setTranscripts(prev => {
+       const lastItem = prev[prev.length - 1];
+       
+       if (lastItem && lastItem.sender === 'local' && !lastItem.isFinal) {
+          // Update existing pending transcript
+          const updatedItem = { ...lastItem, text, isFinal, timestamp: Date.now() };
+          
+          // Send to Peer
+          if (dataConnRef.current && dataConnRef.current.open) {
+             dataConnRef.current.send({ type: 'TRANSCRIPT', payload: updatedItem });
+          }
+
+          const newList = [...prev];
+          newList[newList.length - 1] = updatedItem;
+          return newList;
+       } else {
+          // New transcript item
+          const newItem: TranscriptionItem = { 
+            id, 
+            sender: 'local', 
+            text, 
+            isFinal, 
+            timestamp: Date.now() 
+          };
+
+          // Send to Peer
+          if (dataConnRef.current && dataConnRef.current.open) {
+             dataConnRef.current.send({ type: 'TRANSCRIPT', payload: newItem });
+          }
+
+          return [...prev, newItem];
+       }
     });
   };
 
@@ -205,6 +297,8 @@ const App: React.FC = () => {
           statusText={statusText}
           toggleDeafMode={() => setIsDeaf(!isDeaf)}
           isDeaf={isDeaf}
+          transcripts={transcripts}
+          onLocalSpeech={handleLocalTranscript}
         />
       )}
 

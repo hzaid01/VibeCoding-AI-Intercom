@@ -1,3 +1,4 @@
+
 export enum AppState {
   LANDING = 'LANDING',
   INITIALIZING = 'INITIALIZING',
@@ -26,8 +27,9 @@ export enum PermissionStatus {
 
 export interface TranscriptionItem {
   id: string;
+  sender: 'local' | 'remote'; // New field to identify speaker
   text: string;
+  translatedText?: string;
   isFinal: boolean;
   timestamp: number;
-  translated?: boolean;
 }

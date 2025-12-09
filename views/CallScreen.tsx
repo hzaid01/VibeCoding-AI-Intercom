@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, PhoneOff, Ear, EarOff, Languages, MessageSquareText, Activity } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, Ear, EarOff, Languages, MessageSquareText, Activity, ArrowRightLeft } from 'lucide-react';
 import { SpeechService } from '../services/speechService';
 import { TranscriptionItem } from '../types';
 
@@ -9,9 +10,40 @@ interface CallScreenProps {
   toggleMic: () => void;
   isMicMuted: boolean;
   statusText: string;
-  toggleDeafMode: () => void; // New prop for deaf mode
+  toggleDeafMode: () => void;
   isDeaf: boolean;
+  transcripts: TranscriptionItem[];
+  onLocalSpeech: (text: string, isFinal: boolean) => void;
 }
+
+// Mock Translation Engine for Demo purposes (English -> Urdu)
+const mockTranslate = (text: string): string => {
+  const dictionary: Record<string, string> = {
+    "hello": "ہیلو",
+    "hi": "سلام",
+    "team": "ٹیم",
+    "good": "اچھا",
+    "morning": "صبح بخیر",
+    "meeting": "میٹنگ",
+    "yes": "ہاں",
+    "no": "نہیں",
+    "thanks": "شکریہ",
+    "project": "پروجیکٹ",
+    "budget": "بجٹ",
+    "timeline": "ٹائم لائن",
+    "approved": "منظور",
+    "bye": "خدا حافظ",
+    "how are you": "آپ کیسے ہو",
+  };
+
+  const words = text.toLowerCase().split(' ');
+  const translatedWords = words.map(word => {
+    const cleanWord = word.replace(/[^a-z0-9]/g, '');
+    return dictionary[cleanWord] || word; // Return mapped word or original if not found
+  });
+
+  return translatedWords.join(' ');
+};
 
 export const CallScreen: React.FC<CallScreenProps> = ({ 
   channelId, 
@@ -20,9 +52,10 @@ export const CallScreen: React.FC<CallScreenProps> = ({
   isMicMuted,
   statusText,
   toggleDeafMode,
-  isDeaf
+  isDeaf,
+  transcripts,
+  onLocalSpeech
 }) => {
-  const [transcripts, setTranscripts] = useState<TranscriptionItem[]>([]);
   const [isTranslateOn, setIsTranslateOn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const speechService = useRef<SpeechService | null>(null);
@@ -31,25 +64,7 @@ export const CallScreen: React.FC<CallScreenProps> = ({
     // Initialize Speech Recognition
     speechService.current = new SpeechService(
       (text, isFinal) => {
-        setTranscripts(prev => {
-           // Basic logic to replace interim results or append final ones
-           const newId = Date.now().toString();
-           // If the last item is not final, replace it. Otherwise append.
-           const lastItem = prev[prev.length - 1];
-           
-           if (lastItem && !lastItem.isFinal) {
-              const updated = [...prev];
-              updated[updated.length - 1] = { 
-                  id: lastItem.id, 
-                  text: text, 
-                  isFinal: isFinal, 
-                  timestamp: Date.now() 
-              };
-              return updated;
-           } else {
-              return [...prev, { id: newId, text: text, isFinal: isFinal, timestamp: Date.now() }];
-           }
-        });
+        onLocalSpeech(text, isFinal);
       },
       (error) => console.warn(error)
     );
@@ -59,7 +74,7 @@ export const CallScreen: React.FC<CallScreenProps> = ({
     return () => {
       speechService.current?.stop();
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll to bottom of transcripts
   useEffect(() => {
@@ -142,24 +157,24 @@ export const CallScreen: React.FC<CallScreenProps> = ({
       </div>
 
       {/* AI Window (Bottom) */}
-      <div className="relative z-30 h-[40vh] md:h-[35vh] glass-panel border-t border-white/10 flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+      <div className={`relative z-30 transition-all duration-500 ease-in-out ${isTranslateOn ? 'h-[50vh]' : 'h-[35vh]'} glass-panel border-t border-white/10 flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.5)]`}>
           {/* AI Toolbar */}
           <div className="p-4 flex items-center justify-between border-b border-white/5 bg-black/20">
               <div className="flex items-center gap-2">
                   <Activity className="w-4 h-4 text-primary" />
-                  <span className="text-sm font-bold text-white tracking-wide">AI TRANSCRIPTION</span>
+                  <span className="text-sm font-bold text-white tracking-wide">AI CONTEXT STREAM</span>
               </div>
               
               <button 
                 onClick={() => setIsTranslateOn(!isTranslateOn)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono transition-colors border ${
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono transition-all duration-300 border ${
                     isTranslateOn 
-                    ? 'bg-secondary/20 border-secondary text-secondary' 
+                    ? 'bg-secondary/20 border-secondary text-secondary shadow-[0_0_15px_rgba(213,0,249,0.3)]' 
                     : 'bg-transparent border-gray-700 text-gray-400 hover:border-gray-500'
                 }`}
               >
-                  <Languages className="w-3 h-3" />
-                  {isTranslateOn ? 'URDU -> ENG' : 'TRANSLATE OFF'}
+                  {isTranslateOn ? <ArrowRightLeft className="w-3 h-3" /> : <Languages className="w-3 h-3" />}
+                  {isTranslateOn ? 'ENG <-> URDU' : 'ENABLE TRANSLATION'}
               </button>
           </div>
 
@@ -173,16 +188,45 @@ export const CallScreen: React.FC<CallScreenProps> = ({
               )}
               
               {transcripts.map((item) => (
-                  <div key={item.id} className={`flex gap-3 animate-in fade-in slide-in-from-bottom-2 ${item.isFinal ? 'opacity-100' : 'opacity-60'}`}>
-                      <div className="mt-1 w-1 h-1 rounded-full bg-primary shrink-0"></div>
-                      <div className="space-y-1">
-                          <p className="text-lg md:text-xl font-medium leading-relaxed text-gray-200">
-                              {item.text}
-                              {isTranslateOn && item.text.length > 5 && (
-                                  <span className="ml-2 text-secondary text-base italic">(Translated)</span>
-                              )}
-                          </p>
-                      </div>
+                  <div key={item.id} className={`group animate-in fade-in slide-in-from-bottom-2 duration-300 ${item.isFinal ? 'opacity-100' : 'opacity-60'}`}>
+                      {isTranslateOn ? (
+                        /* Split View for Translation */
+                        <div className={`grid grid-cols-2 gap-4 ${item.sender === 'local' ? 'border-r-2 border-primary/20 pr-2' : 'border-l-2 border-secondary/20 pl-2'}`}>
+                          {/* Original */}
+                          <div className={`relative p-3 rounded-lg border ${item.sender === 'local' ? 'bg-primary/5 border-primary/10' : 'bg-gray-900/50 border-gray-800/50'}`}>
+                             <div className={`absolute -top-2 left-2 px-1 bg-black text-[10px] font-mono uppercase ${item.sender === 'local' ? 'text-primary' : 'text-gray-500'}`}>
+                                {item.sender === 'local' ? 'You (EN)' : 'Peer (EN)'}
+                             </div>
+                             <p className="text-gray-300 text-sm md:text-base">{item.text}</p>
+                          </div>
+                          
+                          {/* Translated */}
+                          <div className={`relative p-3 rounded-lg border ${item.sender === 'local' ? 'bg-primary/5 border-primary/20' : 'bg-secondary/5 border-secondary/20'}`}>
+                             <div className={`absolute -top-2 left-2 px-1 bg-black text-[10px] font-mono uppercase ${item.sender === 'local' ? 'text-primary' : 'text-secondary'}`}>
+                                {item.sender === 'local' ? 'You (UR)' : 'Peer (UR)'}
+                             </div>
+                             <p className="text-white text-sm md:text-base font-medium" dir="rtl">
+                                {mockTranslate(item.text)}
+                             </p>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Single View */
+                        <div className={`flex flex-col gap-1 max-w-3xl ${item.sender === 'local' ? 'items-end ml-auto' : 'items-start mr-auto'}`}>
+                            <span className={`text-[10px] font-mono uppercase tracking-wider ${item.sender === 'local' ? 'text-primary' : 'text-secondary'}`}>
+                                {item.sender === 'local' ? 'YOU' : 'PEER'}
+                            </span>
+                            <div className={`p-4 rounded-2xl ${
+                                item.sender === 'local' 
+                                ? 'bg-primary/10 border border-primary/20 text-white rounded-tr-none' 
+                                : 'bg-surface border border-gray-800 text-gray-200 rounded-tl-none'
+                            }`}>
+                                <p className="text-lg leading-relaxed">
+                                    {item.text}
+                                </p>
+                            </div>
+                        </div>
+                      )}
                   </div>
               ))}
           </div>
