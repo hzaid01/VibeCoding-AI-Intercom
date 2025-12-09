@@ -1,0 +1,7 @@
+{
+  "name": "Universal AI Intercom",
+  "description": "Secure P2P Voice Link with AI Context Analysis.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

@@ -1,0 +1,33 @@
+export enum AppState {
+  LANDING = 'LANDING',
+  INITIALIZING = 'INITIALIZING',
+  WAITING_FOR_PEER = 'WAITING_FOR_PEER', // Host waiting
+  CONNECTING = 'CONNECTING', // Guest connecting
+  ACTIVE_CALL = 'ACTIVE_CALL',
+  SUMMARY_VIEW = 'SUMMARY_VIEW',
+}
+
+export enum AppRole {
+  TRANSMITTER = 'TRANSMITTER',
+  RECEIVER = 'RECEIVER',
+}
+
+export interface CallMetrics {
+  duration: number; // in seconds
+  status: 'secure' | 'connecting' | 'failed';
+}
+
+export enum PermissionStatus {
+  GRANTED = 'GRANTED',
+  DENIED = 'DENIED',
+  PROMPT = 'PROMPT',
+  UNKNOWN = 'UNKNOWN',
+}
+
+export interface TranscriptionItem {
+  id: string;
+  text: string;
+  isFinal: boolean;
+  timestamp: number;
+  translated?: boolean;
+}
