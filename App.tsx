@@ -327,13 +327,42 @@ const App: React.FC = () => {
       console.log('✅ TURN credentials fetched successfully:', iceServers);
     } catch (error) {
       console.error('❌ Failed to fetch TURN credentials:', error);
-      // Fallback to basic STUN if API fails
+      // CRITICAL: Fallback must include TURN servers for cross-network connectivity
+      // STUN alone cannot work across different networks/NATs
       iceServers = [
+        // Google STUN servers
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        // CRITICAL: TURN servers for NAT traversal (required for cross-network)
+        {
+          urls: 'turn:a.relay.metered.ca:80',
+          username: 'e46a88927fb974bd3633df64',
+          credential: 'MYDQbvLnDu7TD1P7'
+        },
+        {
+          urls: 'turn:a.relay.metered.ca:443',
+          username: 'e46a88927fb974bd3633df64',
+          credential: 'MYDQbvLnDu7TD1P7'
+        },
+        {
+          urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+          username: 'e46a88927fb974bd3633df64',
+          credential: 'MYDQbvLnDu7TD1P7'
+        },
+        // Additional TURN servers with TCP for restrictive firewalls
+        {
+          urls: 'turns:a.relay.metered.ca:443?transport=tcp',
+          username: 'e46a88927fb974bd3633df64',
+          credential: 'MYDQbvLnDu7TD1P7'
+        }
       ];
-      console.log('⚠️ Using fallback STUN servers');
+      console.log('⚠️ Using fallback TURN+STUN servers');
     }
+
+    // Log final ICE configuration for debugging
+    console.log('🔧 Final ICE servers count:', iceServers.length);
+    console.log('🔧 ICE servers:', JSON.stringify(iceServers.map((s: any) => s.urls || s), null, 2));
 
     // Initialize Peer with dynamically fetched TURN credentials
     const peerConfig = {
