@@ -20,21 +20,21 @@ const PEER_CONFIG = {
       { urls: 'stun:stun3.l.google.com:19302' },
       { urls: 'stun:stun4.l.google.com:19302' },
 
-      // Free TURN servers - Option 1: OpenRelay (Metered)
+      // DEDICATED TURN servers (User's Personal Metered.ca Account - 20GB/month)
       {
-        urls: 'turn:openrelay.metered.ca:80',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
+        urls: 'turn:hzaid01.metered.live:80',
+        username: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5',
+        credential: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5'
       },
       {
-        urls: 'turn:openrelay.metered.ca:443',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
+        urls: 'turn:hzaid01.metered.live:443',
+        username: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5',
+        credential: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5'
       },
       {
-        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
+        urls: 'turn:hzaid01.metered.live:443?transport=tcp',
+        username: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5',
+        credential: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5'
       },
 
       // Free TURN servers - Option 2: Twilio STUN/TURN
@@ -572,10 +572,10 @@ const App: React.FC = () => {
             <button
               onClick={toggleMic}
               className={`w-40 h-40 rounded-full flex items-center justify-center transition-all duration-300 ${isMicMuted
-                  ? 'bg-red-500/20 border-4 border-red-500 text-red-500'
-                  : isSpeaking
-                    ? 'bg-blue-600 border-4 border-blue-400 text-white ring-8 ring-blue-500/50 shadow-2xl shadow-blue-500/50'
-                    : 'bg-gray-800 border-4 border-gray-600 text-white hover:border-gray-500'
+                ? 'bg-red-500/20 border-4 border-red-500 text-red-500'
+                : isSpeaking
+                  ? 'bg-blue-600 border-4 border-blue-400 text-white ring-8 ring-blue-500/50 shadow-2xl shadow-blue-500/50'
+                  : 'bg-gray-800 border-4 border-gray-600 text-white hover:border-gray-500'
                 }`}
             >
               {isMicMuted ? <MicOff className="w-16 h-16" /> : <Mic className="w-16 h-16" />}
@@ -594,8 +594,8 @@ const App: React.FC = () => {
                 onClick={isCaptioning ? stopCaptioning : startCaptioning}
                 disabled={!speechRecognitionSupported}
                 className={`px-6 py-3 rounded-xl font-bold text-sm uppercase tracking-wide transition-all ${isCaptioning
-                    ? 'bg-green-500 text-white hover:bg-green-600'
-                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                  ? 'bg-green-500 text-white hover:bg-green-600'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
                   } ${!speechRecognitionSupported && 'opacity-50 cursor-not-allowed'}`}
               >
                 {isCaptioning ? '⏹ Stop Captioning' : '▶ Start Captioning'}
