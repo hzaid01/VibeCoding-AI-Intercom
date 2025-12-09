@@ -7,6 +7,16 @@ import { CallScreen } from './views/CallScreen';
 import { SummaryScreen } from './views/SummaryScreen';
 import { PermissionService } from './services/permissionService';
 
+// CRITICAL: STUN Servers for Cross-Network Connectivity (4G <-> WiFi)
+const PEER_CONFIG = {
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
+    ]
+  }
+};
+
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.LANDING);
   const [channelId, setChannelId] = useState<string>('');
@@ -27,14 +37,14 @@ const App: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    // Create hidden audio element
+    // Create hidden audio element for WebRTC stream
     audioRef.current = new Audio();
     return () => {
       cleanupConnection();
     };
   }, []);
 
-  // Update audio element volume based on deafness
+  // Update audio element volume based on deafness toggle
   useEffect(() => {
     if (audioRef.current) {
         audioRef.current.muted = isDeaf;
@@ -73,52 +83,67 @@ const App: React.FC = () => {
       setIsDeaf(false);
   };
 
+  // Helper to send data safely
+  const sendData = (data: any) => {
+    if (dataConnRef.current && dataConnRef.current.open) {
+      try {
+        dataConnRef.current.send(data);
+      } catch (err) {
+        console.error("Data send failed:", err);
+      }
+    }
+  };
+
   const initializePeer = async (id: string | null = null): Promise<Peer> => {
-    // Get Mic Access First
+    // 1. Get Mic Access
     const permission = await PermissionService.requestMicrophoneAccess();
     if (!permission.stream) {
-      alert("Microphone access is required to use EchoLink.");
+      alert("Microphone access is required.");
       throw new Error("No Mic");
     }
     localStreamRef.current = permission.stream;
 
-    // Initialize PeerJS
-    const peer = new Peer(id ? id : undefined, { debug: 1 });
+    // 2. Initialize Peer with STUN Config
+    const peer = new Peer(id ? id : undefined, PEER_CONFIG);
     peerRef.current = peer;
 
     peer.on('error', (err) => {
-      console.error(err);
+      console.error('Peer Error:', err);
       setStatusText(`Connection Error: ${err.type}`);
       if (err.type === 'peer-unavailable') {
-         alert("Channel ID not found or peer is offline.");
-         endCall();
+         alert("Channel ID not found. The Host might be offline.");
+         resetToHub();
       }
     });
 
     return peer;
   };
 
-  // Handle incoming data (transcripts) from the peer
-  const setupDataConnection = (conn: DataConnection) => {
+  // Setup listeners for incoming data (Chat/Transcripts)
+  const setupDataConnectionListeners = (conn: DataConnection) => {
     dataConnRef.current = conn;
     
     conn.on('open', () => {
-        console.log("Data connection established");
+        console.log("Data connection established with:", conn.peer);
+        // Optional: Send a handshake or sync message
     });
 
     conn.on('data', (data: any) => {
+        console.log("Received data:", data);
         if (data && data.type === 'TRANSCRIPT') {
             const remoteItem = data.payload as TranscriptionItem;
+            // Force sender to be 'remote' for incoming data
+            const incomingItem = { ...remoteItem, sender: 'remote' as const };
+            
             setTranscripts(prev => {
-                // Check if we need to update an existing non-final item or add new
-                const existingIndex = prev.findIndex(t => t.id === remoteItem.id);
-                
+                // Check if we are updating an interim result
+                const existingIndex = prev.findIndex(t => t.id === incomingItem.id);
                 if (existingIndex !== -1) {
                     const updated = [...prev];
-                    updated[existingIndex] = { ...remoteItem, sender: 'remote' };
+                    updated[existingIndex] = incomingItem;
                     return updated;
                 } else {
-                    return [...prev, { ...remoteItem, sender: 'remote' }];
+                    return [...prev, incomingItem];
                 }
             });
         }
@@ -129,9 +154,10 @@ const App: React.FC = () => {
     });
   };
 
+  // --- HOST LOGIC ---
   const handleCreateHost = async () => {
     setAppState(AppState.INITIALIZING);
-    setStatusText("Initializing Secure Channel...");
+    setStatusText("Initializing Host...");
     
     // Generate Random 4 digit ID
     const newId = Math.floor(1000 + Math.random() * 9000).toString();
@@ -145,58 +171,63 @@ const App: React.FC = () => {
         setStatusText("Waiting for Guest...");
       });
 
-      // Handle Incoming Audio Call
+      // 1. Handle Incoming Audio Call
       peer.on('call', (call) => {
-        setStatusText("Establishing Link...");
+        setStatusText("Incoming Call...");
         call.answer(localStreamRef.current!);
-        handleCallStream(call);
+        handleMediaStream(call);
       });
 
-      // Handle Incoming Data Connection (for Chat/Transcript)
+      // 2. Handle Incoming Data Connection (Text Sync)
       peer.on('connection', (conn) => {
-        setupDataConnection(conn);
+        console.log("Guest connected to data channel");
+        setupDataConnectionListeners(conn);
       });
 
     } catch (e) {
+      console.error(e);
       setAppState(AppState.LANDING);
     }
   };
 
+  // --- GUEST LOGIC ---
   const handleJoinGuest = async (targetId: string) => {
     setAppState(AppState.CONNECTING);
-    setStatusText(`Locating Channel ${targetId}...`);
+    setStatusText(`Connecting to ${targetId}...`);
     setChannelId(targetId);
 
     try {
-      const peer = await initializePeer(); // Let server assign our ID
+      const peer = await initializePeer(); 
 
       peer.on('open', () => {
         setStatusText("Handshaking...");
         
-        // Initiate Audio Call
-        const call = peer.call(targetId, localStreamRef.current!);
-        handleCallStream(call);
-
-        // Initiate Data Connection
+        // 1. Start Data Connection First
         const conn = peer.connect(targetId, { reliable: true });
-        setupDataConnection(conn);
+        setupDataConnectionListeners(conn);
+
+        // 2. Start Audio Call
+        const call = peer.call(targetId, localStreamRef.current!);
+        handleMediaStream(call);
       });
 
     } catch (e) {
+      console.error(e);
       setAppState(AppState.LANDING);
     }
   };
 
-  const handleCallStream = (call: MediaConnection) => {
+  // Common Media Handler
+  const handleMediaStream = (call: MediaConnection) => {
     activeCallRef.current = call;
     
     call.on('stream', (remoteStream) => {
       if (audioRef.current) {
         audioRef.current.srcObject = remoteStream;
-        audioRef.current.play().catch(e => console.error("Audio play failed", e));
+        audioRef.current.play().catch(e => console.error("Audio autoplay block:", e));
       }
       setAppState(AppState.ACTIVE_CALL);
-      setStatusText("SECURE CONNECTION ACTIVE");
+      setStatusText("SECURE LINK ACTIVE");
     });
 
     call.on('close', () => {
@@ -204,49 +235,44 @@ const App: React.FC = () => {
     });
   };
 
+  // Called by CallScreen when local user speaks
   const handleLocalTranscript = useCallback((text: string, isFinal: boolean) => {
-    // Unique ID generation: Timestamp + Random Suffix to avoid collisions
-    const tempId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+    // Generate ID: Use a timestamp-based ID. 
+    // If it's an interim result updating the previous one, we might want to reuse ID?
+    // Simplified strategy: 
+    // If the last item in state is 'local' and !isFinal, update it.
+    // Otherwise create new.
     
     setTranscripts(prev => {
        const lastItem = prev[prev.length - 1];
-       
+       let itemToProcess: TranscriptionItem;
+
        if (lastItem && lastItem.sender === 'local' && !lastItem.isFinal) {
-          // Update existing pending transcript (keep original ID)
-          const updatedItem = { ...lastItem, text, isFinal, timestamp: Date.now() };
+          // Update existing
+          itemToProcess = { ...lastItem, text, isFinal, timestamp: Date.now() };
+          
+          // Optimistic UI Update
+          const newList = [...prev];
+          newList[newList.length - 1] = itemToProcess;
           
           // Send to Peer
-          try {
-            if (dataConnRef.current && dataConnRef.current.open) {
-               dataConnRef.current.send({ type: 'TRANSCRIPT', payload: updatedItem });
-            }
-          } catch (err) {
-            console.error("Failed to send transcript", err);
-          }
-
-          const newList = [...prev];
-          newList[newList.length - 1] = updatedItem;
+          sendData({ type: 'TRANSCRIPT', payload: itemToProcess });
+          
           return newList;
        } else {
-          // New transcript item
-          const newItem: TranscriptionItem = { 
-            id: tempId,
+          // Create New
+          itemToProcess = { 
+            id: `${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
             sender: 'local', 
             text, 
             isFinal, 
             timestamp: Date.now() 
           };
-
+          
           // Send to Peer
-          try {
-            if (dataConnRef.current && dataConnRef.current.open) {
-               dataConnRef.current.send({ type: 'TRANSCRIPT', payload: newItem });
-            }
-          } catch (err) {
-            console.error("Failed to send transcript", err);
-          }
-
-          return [...prev, newItem];
+          sendData({ type: 'TRANSCRIPT', payload: itemToProcess });
+          
+          return [...prev, itemToProcess];
        }
     });
   }, []);
@@ -262,7 +288,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="bg-black text-white min-h-screen">
+    <div className="bg-black text-white min-h-screen font-sans">
       {appState === AppState.LANDING && (
         <LandingScreen 
           onCreate={handleCreateHost}
@@ -276,23 +302,25 @@ const App: React.FC = () => {
             
             <div className="relative">
                 <div className="w-24 h-24 border-4 border-t-primary border-r-secondary border-b-transparent border-l-transparent rounded-full animate-spin"></div>
-                <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-bold text-white">
-                    {channelId ? channelId : "..."}
-                </div>
+                {channelId && (
+                   <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-bold text-white animate-pulse">
+                       {channelId}
+                   </div>
+                )}
             </div>
             
             <div className="relative z-10 space-y-4">
-              <h2 className="text-2xl font-sans font-bold text-white tracking-wide">{statusText}</h2>
-              {channelId && appState === AppState.WAITING_FOR_PEER && (
-                <div className="p-6 bg-surface/80 border border-primary/30 rounded-xl backdrop-blur-md shadow-[0_0_30px_rgba(0,229,255,0.15)]">
+              <h2 className="text-2xl font-bold text-white tracking-wide">{statusText}</h2>
+              {appState === AppState.WAITING_FOR_PEER && (
+                <div className="p-4 bg-surface/80 border border-primary/30 rounded-xl backdrop-blur-md">
                   <p className="text-xs font-mono text-gray-400 mb-2 uppercase tracking-widest">Share Channel ID</p>
-                  <p className="text-6xl font-mono font-bold text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary tracking-widest drop-shadow-sm">{channelId}</p>
+                  <p className="text-5xl font-mono font-bold text-primary tracking-widest">{channelId}</p>
                 </div>
               )}
             </div>
             
             <button onClick={() => { cleanupConnection(); resetToHub(); }} className="text-gray-500 hover:text-white underline text-xs font-mono mt-8 z-10 uppercase tracking-widest">
-                Abort Connection
+                Cancel Connection
             </button>
         </div>
       )}
