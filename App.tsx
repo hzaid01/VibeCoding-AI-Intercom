@@ -14,6 +14,16 @@ interface ChatMessage {
   timestamp: number;
 }
 
+// CRITICAL: STUN Servers for Cross-Network Connectivity (4G <-> WiFi)
+const PEER_CONFIG = {
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
+    ]
+  }
+};
+
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.LANDING);
   const [channelId, setChannelId] = useState<string>('');
@@ -36,14 +46,6 @@ const App: React.FC = () => {
   // Audio element for remote stream
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  // ICE servers config for cross-network connectivity
-  const iceConfig = {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' }
-    ]
-  };
 
   useEffect(() => {
     audioRef.current = new Audio();
@@ -110,7 +112,7 @@ const App: React.FC = () => {
     };
 
     recognition.onend = () => {
-      // Auto-restart if still in active call
+      // Auto-restart if still in active call (infinite listening)
       if (isListeningRef.current && appState === AppState.ACTIVE_CALL) {
         try {
           recognition.start();
@@ -170,24 +172,30 @@ const App: React.FC = () => {
     setChannelId('');
     setStatusText('');
     setMessages([]);
+    setIsMicMuted(false);
+    setIsDeaf(false);
   };
 
+  // Setup DataConnection for text sync between peers
   const setupDataConnection = (conn: DataConnection) => {
     dataConnRef.current = conn;
     
     conn.on('open', () => {
-      console.log('Data connection established');
+      console.log('Data connection established with:', conn.peer);
     });
     
     conn.on('data', (data: any) => {
+      console.log('Received data:', data);
       // Received message from peer
-      const peerMessage: ChatMessage = {
-        id: Date.now().toString(),
-        sender: 'Peer',
-        text: data.text,
-        timestamp: Date.now()
-      };
-      setMessages(prev => [...prev, peerMessage]);
+      if (data && data.text) {
+        const peerMessage: ChatMessage = {
+          id: Date.now().toString(),
+          sender: 'Peer',
+          text: data.text,
+          timestamp: Date.now()
+        };
+        setMessages(prev => [...prev, peerMessage]);
+      }
     });
     
     conn.on('close', () => {
@@ -198,38 +206,37 @@ const App: React.FC = () => {
   const initializePeer = async (id: string | null = null): Promise<Peer> => {
     const permission = await PermissionService.requestMicrophoneAccess();
     if (!permission.stream) {
-      alert("Microphone access is required to use EchoLink.");
+      alert("Microphone access is required.");
       throw new Error("No Mic");
     }
     localStreamRef.current = permission.stream;
 
-    // Initialize PeerJS with STUN servers for cross-network connectivity
-    const peer = new Peer(id ? id : undefined, { 
-      debug: 2,
-      config: iceConfig
-    });
+    // Initialize Peer with STUN Config for cross-network connectivity
+    const peer = new Peer(id ? id : undefined, PEER_CONFIG);
     peerRef.current = peer;
 
     peer.on('error', (err) => {
-      console.error(err);
+      console.error('Peer Error:', err);
       setStatusText(`Connection Error: ${err.type}`);
       if (err.type === 'peer-unavailable') {
-        alert("Channel ID not found or peer is offline.");
-        endCall();
+        alert("Channel ID not found. The Host might be offline.");
+        resetToHub();
       }
     });
 
-    // Listen for incoming data connections
+    // Listen for incoming data connections (Host receives this)
     peer.on('connection', (conn) => {
+      console.log("Incoming data connection from:", conn.peer);
       setupDataConnection(conn);
     });
 
     return peer;
   };
 
+  // --- HOST LOGIC ---
   const handleCreateHost = async () => {
     setAppState(AppState.INITIALIZING);
-    setStatusText("Initializing Secure Channel...");
+    setStatusText("Initializing Host...");
     
     const newId = Math.floor(1000 + Math.random() * 9000).toString();
     
@@ -242,20 +249,23 @@ const App: React.FC = () => {
         setStatusText("Waiting for Guest...");
       });
 
+      // Handle Incoming Audio Call
       peer.on('call', (call) => {
-        setStatusText("Establishing Link...");
+        setStatusText("Incoming Call...");
         call.answer(localStreamRef.current!);
-        handleCallStream(call);
+        handleMediaStream(call);
       });
 
     } catch (e) {
+      console.error(e);
       setAppState(AppState.LANDING);
     }
   };
 
+  // --- GUEST LOGIC ---
   const handleJoinGuest = async (targetId: string) => {
     setAppState(AppState.CONNECTING);
-    setStatusText(`Locating Channel ${targetId}...`);
+    setStatusText(`Connecting to ${targetId}...`);
     setChannelId(targetId);
 
     try {
@@ -264,30 +274,32 @@ const App: React.FC = () => {
       peer.on('open', () => {
         setStatusText("Handshaking...");
         
-        // Establish data connection for text sync
-        const dataConn = peer.connect(targetId);
-        setupDataConnection(dataConn);
-        
-        // Establish media connection for audio
+        // 1. Start Data Connection First (for text sync)
+        const conn = peer.connect(targetId, { reliable: true });
+        setupDataConnection(conn);
+
+        // 2. Start Audio Call
         const call = peer.call(targetId, localStreamRef.current!);
-        handleCallStream(call);
+        handleMediaStream(call);
       });
 
     } catch (e) {
+      console.error(e);
       setAppState(AppState.LANDING);
     }
   };
 
-  const handleCallStream = (call: MediaConnection) => {
+  // Common Media Handler
+  const handleMediaStream = (call: MediaConnection) => {
     activeCallRef.current = call;
     
     call.on('stream', (remoteStream) => {
       if (audioRef.current) {
         audioRef.current.srcObject = remoteStream;
-        audioRef.current.play().catch(e => console.error("Audio play failed", e));
+        audioRef.current.play().catch(e => console.error("Audio autoplay block:", e));
       }
       setAppState(AppState.ACTIVE_CALL);
-      setStatusText("SECURE CONNECTION ACTIVE");
+      setStatusText("SECURE LINK ACTIVE");
       
       // Initialize and start speech recognition when call becomes active
       initSpeechRecognition();
@@ -334,7 +346,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="bg-black text-white min-h-screen">
+    <div className="bg-black text-white min-h-screen font-sans">
       {appState === AppState.LANDING && (
         <LandingScreen 
           onCreate={handleCreateHost}
@@ -348,14 +360,16 @@ const App: React.FC = () => {
           
           <div className="relative">
             <div className="w-24 h-24 border-4 border-t-primary border-r-secondary border-b-transparent border-l-transparent rounded-full animate-spin"></div>
-            <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-bold text-white">
-              {channelId ? channelId : "..."}
-            </div>
+            {channelId && (
+              <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-bold text-white animate-pulse">
+                {channelId}
+              </div>
+            )}
           </div>
           
           <div className="relative z-10 space-y-4">
-            <h2 className="text-2xl font-sans font-bold text-white tracking-wide">{statusText}</h2>
-            {channelId && appState === AppState.WAITING_FOR_PEER && (
+            <h2 className="text-2xl font-bold text-white tracking-wide">{statusText}</h2>
+            {appState === AppState.WAITING_FOR_PEER && (
               <div className="p-6 bg-surface/80 border border-primary/30 rounded-xl backdrop-blur-md shadow-[0_0_30px_rgba(0,229,255,0.15)]">
                 <p className="text-xs font-mono text-gray-400 mb-2 uppercase tracking-widest">Share Channel ID</p>
                 <p className="text-6xl font-mono font-bold text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary tracking-widest drop-shadow-sm">{channelId}</p>
@@ -364,7 +378,7 @@ const App: React.FC = () => {
           </div>
           
           <button onClick={() => { cleanupConnection(); resetToHub(); }} className="text-gray-500 hover:text-white underline text-xs font-mono mt-8 z-10 uppercase tracking-widest">
-            Abort Connection
+            Cancel Connection
           </button>
         </div>
       )}

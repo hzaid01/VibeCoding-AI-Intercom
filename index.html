@@ -1,79 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#000000" />
-  <title>EchoLink AI</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap"
-    rel="stylesheet">
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Rajdhani', 'sans-serif'],
-            mono: ['"Share Tech Mono"', 'monospace'],
-          },
-          colors: {
-            background: '#000000',
-            surface: '#0A0A0A',
-            primary: '#00E5FF', // Neon Cyan
-            secondary: '#D500F9', // Neon Purple
-            'glass': 'rgba(10, 10, 10, 0.7)',
-          },
-          animation: {
-            'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-            'glow': 'glow 2s ease-in-out infinite alternate',
-            'wave': 'wave 1.2s ease-in-out infinite',
-          },
-          keyframes: {
-            glow: {
-              '0%': { boxShadow: '0 0 5px #00E5FF, 0 0 10px #00E5FF' },
-              '100%': { boxShadow: '0 0 20px #00E5FF, 0 0 30px #00E5FF' },
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <title>EchoLink AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Rajdhani', 'sans-serif'],
+              mono: ['"Share Tech Mono"', 'monospace'],
             },
-            wave: {
-              '0%, 100%': { transform: 'scaleY(1)' },
-              '50%': { transform: 'scaleY(0.4)' },
+            colors: {
+              background: '#000000',
+              surface: '#0A0A0A',
+              primary: '#00E5FF', // Neon Cyan
+              secondary: '#D500F9', // Neon Purple
+              'glass': 'rgba(10, 10, 10, 0.7)',
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'glow': 'glow 2s ease-in-out infinite alternate',
+              'wave': 'wave 1.2s ease-in-out infinite',
+            },
+            keyframes: {
+              glow: {
+                '0%': { boxShadow: '0 0 5px #00E5FF, 0 0 10px #00E5FF' },
+                '100%': { boxShadow: '0 0 20px #00E5FF, 0 0 30px #00E5FF' },
+              },
+              wave: {
+                '0%, 100%': { transform: 'scaleY(1)' },
+                '50%': { transform: 'scaleY(0.4)' },
+              }
             }
-          }
+          },
         },
-      },
-    }
-  </script>
-  <style>
-    body {
-      background-color: #000000;
-      color: #ffffff;
-      overflow-x: hidden;
-    }
-
-    .glass-panel {
-      background: rgba(20, 20, 20, 0.6);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-
-    ::-webkit-scrollbar {
-      width: 4px;
-    }
-
-    ::-webkit-scrollbar-track {
-      background: #000;
-    }
-
-    ::-webkit-scrollbar-thumb {
-      background: #333;
-      border-radius: 2px;
-    }
-  </style>
+      }
+    </script>
+    <style>
+      body {
+        background-color: #000000;
+        color: #ffffff;
+        overflow-x: hidden;
+      }
+      .glass-panel {
+        background: rgba(20, 20, 20, 0.6);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      ::-webkit-scrollbar {
+        width: 4px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #000;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #333;
+        border-radius: 2px;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
+    "peerjs": "https://esm.sh/peerjs@1.5.2?bundle"
+  }
+}
+</script>
 </head>
-
-<body>
-  <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
-</body>
-
+  <body>
+    <div id="root"></div>
+  </body>
 </html>
