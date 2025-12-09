@@ -1,25 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Peer, MediaConnection, DataConnection } from 'peerjs';
-import { Mic, MicOff, PhoneOff, Ear, EarOff, Languages, MessageSquareText, Activity } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, Ear, EarOff, Radio, AlertTriangle } from 'lucide-react';
 import { AppState } from './types';
 import { LandingScreen } from './views/LandingScreen';
 import { SummaryScreen } from './views/SummaryScreen';
 import { PermissionService } from './services/permissionService';
 
-// Message type for chat bubbles
-interface ChatMessage {
-  id: string;
-  sender: 'Me' | 'Peer';
-  text: string;
-  timestamp: number;
-}
+// Connection Status Type
+type ConnectionStatus = 'Disconnected' | 'Connecting' | 'Connected';
 
-// CRITICAL: STUN Servers for Cross-Network Connectivity (4G <-> WiFi)
+// CRITICAL: Maximum Compatibility STUN Servers for Cross-Network Connectivity
 const PEER_CONFIG = {
   config: {
     iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' }
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun.global.stun.twilio.com:3478' },
+      { urls: 'stun:stun.miwifi.com:3478' }
     ]
   }
 };
@@ -30,25 +27,41 @@ const App: React.FC = () => {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isDeaf, setIsDeaf] = useState(false);
   const [statusText, setStatusText] = useState('');
-  const [isTranslateOn, setIsTranslateOn] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('Disconnected');
+
+  // Walkie-Talkie Model: Simple live captions
+  const [myText, setMyText] = useState<string>('Listening...');
+  const [peerText, setPeerText] = useState<string>('Waiting for peer...');
+
+  // AI Captioning toggle
+  const [isCaptioning, setIsCaptioning] = useState(false);
+
+  // Speech recognition availability
+  const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(true);
+
   // Refs for WebRTC management
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const activeCallRef = useRef<MediaConnection | null>(null);
   const dataConnRef = useRef<DataConnection | null>(null);
-  
+
   // Speech recognition ref
   const recognitionRef = useRef<any>(null);
-  const isListeningRef = useRef<boolean>(false);
-  
+
   // Audio element for remote stream
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     audioRef.current = new Audio();
+
+    // Check speech recognition support
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechRecognitionSupported(false);
+      console.warn('Speech Recognition not supported in this browser.');
+    }
+
     return () => {
       cleanupConnection();
     };
@@ -60,22 +73,15 @@ const App: React.FC = () => {
     }
   }, [isDeaf]);
 
-  // Auto-scroll chat to bottom
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
-
   // Initialize Speech Recognition
   const initSpeechRecognition = useCallback(() => {
-    if (!('webkitSpeechRecognition' in window)) {
-      console.warn('Browser does not support Speech Recognition.');
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
       return;
     }
 
-    // @ts-ignore
-    const recognition = new window.webkitSpeechRecognition();
+    const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
@@ -85,22 +91,12 @@ const App: React.FC = () => {
         if (event.results[i].isFinal) {
           let transcript = event.results[i][0].transcript.trim();
           if (transcript) {
-            // Apply mock translation if enabled
-            const finalText = isTranslateOn ? `${transcript} [Urdu->Eng]` : transcript;
-            
-            const newMessage: ChatMessage = {
-              id: Date.now().toString(),
-              sender: 'Me',
-              text: finalText,
-              timestamp: Date.now()
-            };
-            
-            // Add to local state
-            setMessages(prev => [...prev, newMessage]);
-            
+            // Update my text (live caption)
+            setMyText(transcript);
+
             // Send to peer via DataConnection
             if (dataConnRef.current?.open) {
-              dataConnRef.current.send({ text: finalText });
+              dataConnRef.current.send({ text: transcript });
             }
           }
         }
@@ -109,42 +105,45 @@ const App: React.FC = () => {
 
     recognition.onerror = (event: any) => {
       console.error('Speech recognition error:', event.error);
-    };
-
-    recognition.onend = () => {
-      // Auto-restart if still in active call (infinite listening)
-      if (isListeningRef.current && appState === AppState.ACTIVE_CALL) {
-        try {
-          recognition.start();
-        } catch (e) {
-          // Ignore already started errors
-        }
+      if (event.error === 'no-speech') {
+        setMyText('No speech detected...');
       }
     };
 
-    recognitionRef.current = recognition;
-  }, [isTranslateOn, appState]);
+    recognition.onend = () => {
+      // Manual restart only - no auto-restart for stability on mobile
+      console.log('Speech recognition ended');
+    };
 
-  const startSpeechRecognition = useCallback(() => {
-    if (recognitionRef.current && !isListeningRef.current) {
+    recognitionRef.current = recognition;
+  }, []);
+
+  const startCaptioning = useCallback(() => {
+    if (!recognitionRef.current) {
+      initSpeechRecognition();
+    }
+
+    if (recognitionRef.current && !isCaptioning) {
       try {
         recognitionRef.current.start();
-        isListeningRef.current = true;
+        setIsCaptioning(true);
+        setMyText('Listening...');
       } catch (e) {
         console.error('Failed to start speech recognition:', e);
       }
     }
-  }, []);
+  }, [isCaptioning, initSpeechRecognition]);
 
-  const stopSpeechRecognition = useCallback(() => {
-    isListeningRef.current = false;
-    if (recognitionRef.current) {
+  const stopCaptioning = useCallback(() => {
+    if (recognitionRef.current && isCaptioning) {
       recognitionRef.current.stop();
+      setIsCaptioning(false);
+      setMyText('Captioning stopped');
     }
-  }, []);
+  }, [isCaptioning]);
 
   const cleanupConnection = () => {
-    stopSpeechRecognition();
+    stopCaptioning();
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
     }
@@ -160,6 +159,7 @@ const App: React.FC = () => {
     peerRef.current = null;
     activeCallRef.current = null;
     dataConnRef.current = null;
+    setConnectionStatus('Disconnected');
   };
 
   const endCall = () => {
@@ -171,35 +171,34 @@ const App: React.FC = () => {
     setAppState(AppState.LANDING);
     setChannelId('');
     setStatusText('');
-    setMessages([]);
+    setMyText('Listening...');
+    setPeerText('Waiting for peer...');
     setIsMicMuted(false);
     setIsDeaf(false);
+    setIsCaptioning(false);
+    setConnectionStatus('Disconnected');
   };
 
   // Setup DataConnection for text sync between peers
   const setupDataConnection = (conn: DataConnection) => {
     dataConnRef.current = conn;
-    
+
     conn.on('open', () => {
       console.log('Data connection established with:', conn.peer);
+      setConnectionStatus('Connected');
     });
-    
+
     conn.on('data', (data: any) => {
       console.log('Received data:', data);
-      // Received message from peer
+      // Received text from peer - update peer's live caption
       if (data && data.text) {
-        const peerMessage: ChatMessage = {
-          id: Date.now().toString(),
-          sender: 'Peer',
-          text: data.text,
-          timestamp: Date.now()
-        };
-        setMessages(prev => [...prev, peerMessage]);
+        setPeerText(data.text);
       }
     });
-    
+
     conn.on('close', () => {
       console.log('Data connection closed');
+      setConnectionStatus('Disconnected');
     });
   };
 
@@ -211,13 +210,14 @@ const App: React.FC = () => {
     }
     localStreamRef.current = permission.stream;
 
-    // Initialize Peer with STUN Config for cross-network connectivity
+    // Initialize Peer with enhanced STUN Config for maximum cross-network connectivity
     const peer = new Peer(id ? id : undefined, PEER_CONFIG);
     peerRef.current = peer;
 
     peer.on('error', (err) => {
       console.error('Peer Error:', err);
       setStatusText(`Connection Error: ${err.type}`);
+      setConnectionStatus('Disconnected');
       if (err.type === 'peer-unavailable') {
         alert("Channel ID not found. The Host might be offline.");
         resetToHub();
@@ -237,12 +237,13 @@ const App: React.FC = () => {
   const handleCreateHost = async () => {
     setAppState(AppState.INITIALIZING);
     setStatusText("Initializing Host...");
-    
+    setConnectionStatus('Connecting');
+
     const newId = Math.floor(1000 + Math.random() * 9000).toString();
-    
+
     try {
       const peer = await initializePeer(newId);
-      
+
       peer.on('open', (id) => {
         setChannelId(id);
         setAppState(AppState.WAITING_FOR_PEER);
@@ -252,6 +253,8 @@ const App: React.FC = () => {
       // Handle Incoming Audio Call
       peer.on('call', (call) => {
         setStatusText("Incoming Call...");
+        setConnectionStatus('Connecting');
+        // CRITICAL: Answer the call with local stream
         call.answer(localStreamRef.current!);
         handleMediaStream(call);
       });
@@ -259,6 +262,7 @@ const App: React.FC = () => {
     } catch (e) {
       console.error(e);
       setAppState(AppState.LANDING);
+      setConnectionStatus('Disconnected');
     }
   };
 
@@ -267,13 +271,14 @@ const App: React.FC = () => {
     setAppState(AppState.CONNECTING);
     setStatusText(`Connecting to ${targetId}...`);
     setChannelId(targetId);
+    setConnectionStatus('Connecting');
 
     try {
       const peer = await initializePeer();
 
       peer.on('open', () => {
         setStatusText("Handshaking...");
-        
+
         // 1. Start Data Connection First (for text sync)
         const conn = peer.connect(targetId, { reliable: true });
         setupDataConnection(conn);
@@ -286,13 +291,14 @@ const App: React.FC = () => {
     } catch (e) {
       console.error(e);
       setAppState(AppState.LANDING);
+      setConnectionStatus('Disconnected');
     }
   };
 
   // Common Media Handler
   const handleMediaStream = (call: MediaConnection) => {
     activeCallRef.current = call;
-    
+
     call.on('stream', (remoteStream) => {
       if (audioRef.current) {
         audioRef.current.srcObject = remoteStream;
@@ -300,10 +306,10 @@ const App: React.FC = () => {
       }
       setAppState(AppState.ACTIVE_CALL);
       setStatusText("SECURE LINK ACTIVE");
-      
-      // Initialize and start speech recognition when call becomes active
+      setConnectionStatus('Connected');
+
+      // Initialize speech recognition when call becomes active
       initSpeechRecognition();
-      setTimeout(() => startSpeechRecognition(), 500);
     });
 
     call.on('close', () => {
@@ -321,34 +327,37 @@ const App: React.FC = () => {
     }
   };
 
-  // Render Chat Bubble
-  const renderChatBubble = (msg: ChatMessage) => {
-    const isMe = msg.sender === 'Me';
-    return (
-      <div
-        key={msg.id}
-        className={`flex ${isMe ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}
-      >
-        <div
-          className={`max-w-[75%] px-4 py-3 rounded-2xl ${
-            isMe
-              ? 'bg-blue-600 text-white rounded-br-md'
-              : 'bg-gray-700 text-gray-100 rounded-bl-md'
-          }`}
-        >
-          <p className="text-sm font-medium mb-1 opacity-70">
-            {isMe ? 'Me' : 'Peer'}
-          </p>
-          <p className="text-base leading-relaxed">{msg.text}</p>
-        </div>
-      </div>
-    );
+  // Get connection status badge
+  const getStatusBadge = () => {
+    switch (connectionStatus) {
+      case 'Connected':
+        return (
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-green-500/20 border border-green-500">
+            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+            <span className="text-green-500 font-mono text-sm font-bold">🟢 Connected</span>
+          </div>
+        );
+      case 'Connecting':
+        return (
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-yellow-500/20 border border-yellow-500">
+            <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div>
+            <span className="text-yellow-500 font-mono text-sm font-bold">🟡 Connecting</span>
+          </div>
+        );
+      default:
+        return (
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-red-500/20 border border-red-500">
+            <div className="w-2 h-2 rounded-full bg-red-500"></div>
+            <span className="text-red-500 font-mono text-sm font-bold">🔴 Disconnected</span>
+          </div>
+        );
+    }
   };
 
   return (
     <div className="bg-black text-white min-h-screen font-sans">
       {appState === AppState.LANDING && (
-        <LandingScreen 
+        <LandingScreen
           onCreate={handleCreateHost}
           onJoin={handleJoinGuest}
         />
@@ -356,137 +365,149 @@ const App: React.FC = () => {
 
       {(appState === AppState.INITIALIZING || appState === AppState.WAITING_FOR_PEER || appState === AppState.CONNECTING) && (
         <div className="min-h-screen flex flex-col items-center justify-center p-6 space-y-8 text-center bg-black relative overflow-hidden">
-          <div className="absolute inset-0 bg-primary/5 animate-pulse-slow"></div>
-          
+          <div className="absolute inset-0 bg-blue-500/5 animate-pulse"></div>
+
           <div className="relative">
-            <div className="w-24 h-24 border-4 border-t-primary border-r-secondary border-b-transparent border-l-transparent rounded-full animate-spin"></div>
+            <div className="w-24 h-24 border-4 border-t-blue-500 border-r-cyan-500 border-b-transparent border-l-transparent rounded-full animate-spin"></div>
             {channelId && (
               <div className="absolute inset-0 flex items-center justify-center font-mono text-xl font-bold text-white animate-pulse">
                 {channelId}
               </div>
             )}
           </div>
-          
+
           <div className="relative z-10 space-y-4">
             <h2 className="text-2xl font-bold text-white tracking-wide">{statusText}</h2>
             {appState === AppState.WAITING_FOR_PEER && (
-              <div className="p-6 bg-surface/80 border border-primary/30 rounded-xl backdrop-blur-md shadow-[0_0_30px_rgba(0,229,255,0.15)]">
+              <div className="p-6 bg-gray-900/80 border border-blue-500/30 rounded-xl backdrop-blur-md shadow-lg">
                 <p className="text-xs font-mono text-gray-400 mb-2 uppercase tracking-widest">Share Channel ID</p>
-                <p className="text-6xl font-mono font-bold text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary tracking-widest drop-shadow-sm">{channelId}</p>
+                <p className="text-6xl font-mono font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-cyan-500 tracking-widest">{channelId}</p>
               </div>
             )}
           </div>
-          
-          <button onClick={() => { cleanupConnection(); resetToHub(); }} className="text-gray-500 hover:text-white underline text-xs font-mono mt-8 z-10 uppercase tracking-widest">
+
+          <button
+            onClick={() => { cleanupConnection(); resetToHub(); }}
+            className="text-gray-500 hover:text-white underline text-xs font-mono mt-8 z-10 uppercase tracking-widest"
+          >
             Cancel Connection
           </button>
         </div>
       )}
 
       {appState === AppState.ACTIVE_CALL && (
-        <div className="min-h-screen bg-black flex flex-col relative overflow-hidden">
-          {/* Background Ambience */}
-          <div className="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none"></div>
-
-          {/* Header */}
-          <div className="relative z-30 p-6 flex justify-between items-center border-b border-white/5 bg-black/40 backdrop-blur-sm">
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+        <div className="min-h-screen bg-black flex flex-col">
+          {/* Top: Status Badge & Channel ID */}
+          <div className="p-6 flex flex-col md:flex-row justify-between items-center gap-4 border-b border-white/10 bg-gray-900/50 backdrop-blur-sm">
+            <div className="flex items-center gap-4">
+              {getStatusBadge()}
               <div className="text-sm font-mono text-gray-400">
-                LINK: <span className="text-primary font-bold">{channelId}</span>
+                Channel: <span className="text-blue-500 font-bold">{channelId}</span>
               </div>
             </div>
-            <div className="px-3 py-1 rounded border border-gray-800 bg-surface/50 text-xs font-mono text-gray-400">
-              {statusText}
+
+            {/* Speech Recognition Alert */}
+            {!speechRecognitionSupported && (
+              <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/20 border border-red-500">
+                <AlertTriangle className="w-4 h-4 text-red-500" />
+                <span className="text-red-500 text-sm font-bold">Speech Recognition Not Supported</span>
+              </div>
+            )}
+          </div>
+
+          {/* Middle: Two Large Cards (PEER & ME) */}
+          <div className="flex-1 grid md:grid-cols-2 gap-6 p-6">
+            {/* Left Card: PEER (Remote Audio + Peer's Text) */}
+            <div className="bg-gray-900/70 border border-gray-700 rounded-2xl p-6 flex flex-col">
+              <div className="flex items-center gap-3 mb-4">
+                <Radio className="w-5 h-5 text-cyan-500" />
+                <h3 className="text-xl font-bold text-cyan-500 uppercase tracking-wide">Peer</h3>
+              </div>
+
+              {/* Remote Audio Visualizer */}
+              <div className="flex items-center justify-center gap-1 h-20 mb-6">
+                {[...Array(12)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="w-2 rounded-full bg-cyan-500 animate-wave"
+                    style={{
+                      animationDelay: `${i * 0.1}s`,
+                      height: '30%'
+                    }}
+                  ></div>
+                ))}
+              </div>
+
+              {/* Peer's Live Caption */}
+              <div className="flex-1 bg-black/50 rounded-xl p-6 border border-gray-800">
+                <p className="text-sm font-mono text-gray-500 mb-2">Live Caption:</p>
+                <p className="text-lg text-gray-200 leading-relaxed">{peerText}</p>
+              </div>
+            </div>
+
+            {/* Right Card: ME (Mic Button + My Text) */}
+            <div className="bg-gray-900/70 border border-gray-700 rounded-2xl p-6 flex flex-col">
+              <div className="flex items-center gap-3 mb-4">
+                <Radio className="w-5 h-5 text-blue-500" />
+                <h3 className="text-xl font-bold text-blue-500 uppercase tracking-wide">Me</h3>
+              </div>
+
+              {/* Mic Control */}
+              <div className="flex items-center justify-center gap-6 h-20 mb-6">
+                <button
+                  onClick={toggleMic}
+                  className={`p-6 rounded-2xl border transition-all duration-200 ${isMicMuted
+                      ? 'bg-red-500/10 border-red-500 text-red-500'
+                      : 'bg-gray-800 border-gray-600 text-white hover:bg-gray-700'
+                    }`}
+                >
+                  {isMicMuted ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
+                </button>
+
+                <button
+                  onClick={() => setIsDeaf(!isDeaf)}
+                  className={`p-6 rounded-2xl border transition-all duration-200 ${isDeaf
+                      ? 'bg-cyan-500/20 border-cyan-500 text-cyan-500'
+                      : 'bg-gray-800 border-gray-600 text-white hover:bg-gray-700'
+                    }`}
+                >
+                  {isDeaf ? <EarOff className="w-8 h-8" /> : <Ear className="w-8 h-8" />}
+                </button>
+              </div>
+
+              {/* My Live Caption */}
+              <div className="flex-1 bg-black/50 rounded-xl p-6 border border-gray-800">
+                <p className="text-sm font-mono text-gray-500 mb-2">Live Caption:</p>
+                <p className="text-lg text-gray-200 leading-relaxed">{myText}</p>
+              </div>
             </div>
           </div>
 
-          {/* Main Visualizer Area */}
-          <div className="flex-1 flex flex-col items-center justify-center relative z-10 py-8">
-            {/* Central Audio Waveform */}
-            <div className="flex items-center justify-center gap-2 h-24 w-full max-w-md">
-              {[...Array(15)].map((_, i) => (
-                <div 
-                  key={i} 
-                  className={`w-2 rounded-full transition-all duration-300 ${isMicMuted ? 'bg-gray-800 h-2' : 'bg-primary animate-wave'}`}
-                  style={{ 
-                    animationDelay: `${i * 0.05}s`,
-                    animationDuration: '1s',
-                    height: isMicMuted ? '4px' : '40%'
-                  }}
-                ></div>
-              ))}
-            </div>
-            
-            {/* Control Cluster */}
-            <div className="flex items-center gap-6 mt-8">
-              <button 
-                onClick={toggleMic}
-                className={`p-5 rounded-2xl border transition-all duration-200 ${
-                  isMicMuted 
-                    ? 'bg-red-500/10 border-red-500 text-red-500' 
-                    : 'bg-surface border-gray-700 text-white hover:bg-gray-800 hover:border-gray-500'
-                }`}
-              >
-                {isMicMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-              </button>
+          {/* Bottom: Controls */}
+          <div className="p-6 border-t border-white/10 bg-gray-900/50 flex flex-col md:flex-row items-center justify-between gap-4">
+            {/* Manual Captioning Toggle */}
+            <button
+              onClick={isCaptioning ? stopCaptioning : startCaptioning}
+              disabled={!speechRecognitionSupported}
+              className={`px-6 py-3 rounded-xl font-bold text-sm uppercase tracking-wide transition-all ${isCaptioning
+                  ? 'bg-green-500 text-white hover:bg-green-600'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+                } ${!speechRecognitionSupported && 'opacity-50 cursor-not-allowed'}`}
+            >
+              {isCaptioning ? '⏹ Stop AI Captioning' : '▶ Start AI Captioning'}
+            </button>
 
-              <button 
-                onClick={endCall}
-                className="p-8 rounded-full bg-red-600 text-white hover:bg-red-700 shadow-[0_0_30px_rgba(220,38,38,0.4)] border-4 border-black transition-transform active:scale-95"
-              >
-                <PhoneOff className="w-8 h-8 fill-current" />
-              </button>
+            {/* End Call Button */}
+            <button
+              onClick={endCall}
+              className="px-8 py-4 rounded-full bg-red-600 text-white hover:bg-red-700 shadow-lg border-4 border-black transition-transform active:scale-95 flex items-center gap-2"
+            >
+              <PhoneOff className="w-6 h-6" />
+              <span className="font-bold">End Call</span>
+            </button>
 
-              <button 
-                onClick={() => setIsDeaf(!isDeaf)}
-                className={`p-5 rounded-2xl border transition-all duration-200 ${
-                  isDeaf 
-                    ? 'bg-secondary/20 border-secondary text-secondary' 
-                    : 'bg-surface border-gray-700 text-white hover:bg-gray-800 hover:border-gray-500'
-                }`}
-              >
-                {isDeaf ? <EarOff className="w-6 h-6" /> : <Ear className="w-6 h-6" />}
-              </button>
-            </div>
-            
-            <p className="mt-4 text-xs font-mono text-gray-500 uppercase tracking-widest">
-              {isDeaf ? 'Audio Output Disabled' : 'Audio Output Active'}
-            </p>
-          </div>
-
-          {/* Chat Interface (Bottom) */}
-          <div className="relative z-30 h-[45vh] glass-panel border-t border-white/10 flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
-            {/* Toolbar */}
-            <div className="p-4 flex items-center justify-between border-b border-white/5 bg-black/20">
-              <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-primary" />
-                <span className="text-sm font-bold text-white tracking-wide">CONVERSATION</span>
-              </div>
-              
-              <button 
-                onClick={() => setIsTranslateOn(!isTranslateOn)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono transition-colors border ${
-                  isTranslateOn 
-                    ? 'bg-secondary/20 border-secondary text-secondary' 
-                    : 'bg-transparent border-gray-700 text-gray-400 hover:border-gray-500'
-                }`}
-              >
-                <Languages className="w-3 h-3" />
-                {isTranslateOn ? 'URDU -> ENG' : 'TRANSLATE OFF'}
-              </button>
-            </div>
-
-            {/* Chat Messages Scroll Area */}
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 scroll-smooth">
-              {messages.length === 0 && (
-                <div className="h-full flex flex-col items-center justify-center text-gray-600 space-y-2">
-                  <MessageSquareText className="w-8 h-8 opacity-20" />
-                  <p className="text-sm font-mono">Listening for speech...</p>
-                </div>
-              )}
-              
-              {messages.map(renderChatBubble)}
+            <div className="text-xs font-mono text-gray-500">
+              {isMicMuted && '🎤 Muted'} {isDeaf && '🔇 Deaf Mode'}
             </div>
           </div>
         </div>
