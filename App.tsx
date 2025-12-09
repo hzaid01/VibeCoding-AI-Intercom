@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Peer, MediaConnection, DataConnection } from 'peerjs';
 import { AppState, TranscriptionItem } from './types';
 import { LandingScreen } from './views/LandingScreen';
@@ -69,6 +69,8 @@ const App: React.FC = () => {
       setChannelId('');
       setStatusText('');
       setTranscripts([]);
+      setIsMicMuted(false);
+      setIsDeaf(false);
   };
 
   const initializePeer = async (id: string | null = null): Promise<Peer> => {
@@ -81,7 +83,7 @@ const App: React.FC = () => {
     localStreamRef.current = permission.stream;
 
     // Initialize PeerJS
-    const peer = new Peer(id ? id : undefined, { debug: 2 });
+    const peer = new Peer(id ? id : undefined, { debug: 1 });
     peerRef.current = peer;
 
     peer.on('error', (err) => {
@@ -106,14 +108,9 @@ const App: React.FC = () => {
 
     conn.on('data', (data: any) => {
         if (data && data.type === 'TRANSCRIPT') {
-            const remoteItem = data.payload;
+            const remoteItem = data.payload as TranscriptionItem;
             setTranscripts(prev => {
                 // Check if we need to update an existing non-final item or add new
-                const lastItem = prev[prev.length - 1];
-                // Note: Logic here is simplified. In a real app we might match IDs.
-                // Assuming simple append for now or checking if the last item was also remote and non-final
-                
-                // If the incoming data has the same ID as the last remote message, update it
                 const existingIndex = prev.findIndex(t => t.id === remoteItem.id);
                 
                 if (existingIndex !== -1) {
@@ -125,6 +122,10 @@ const App: React.FC = () => {
                 }
             });
         }
+    });
+
+    conn.on('close', () => {
+        console.log("Data connection closed");
     });
   };
 
@@ -177,7 +178,7 @@ const App: React.FC = () => {
         handleCallStream(call);
 
         // Initiate Data Connection
-        const conn = peer.connect(targetId);
+        const conn = peer.connect(targetId, { reliable: true });
         setupDataConnection(conn);
       });
 
@@ -203,20 +204,24 @@ const App: React.FC = () => {
     });
   };
 
-  const handleLocalTranscript = (text: string, isFinal: boolean) => {
-    const id = Date.now().toString(); // Simple ID generation
+  const handleLocalTranscript = useCallback((text: string, isFinal: boolean) => {
+    // Unique ID generation: Timestamp + Random Suffix to avoid collisions
+    const tempId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
     
-    // Update Local State
     setTranscripts(prev => {
        const lastItem = prev[prev.length - 1];
        
        if (lastItem && lastItem.sender === 'local' && !lastItem.isFinal) {
-          // Update existing pending transcript
+          // Update existing pending transcript (keep original ID)
           const updatedItem = { ...lastItem, text, isFinal, timestamp: Date.now() };
           
           // Send to Peer
-          if (dataConnRef.current && dataConnRef.current.open) {
-             dataConnRef.current.send({ type: 'TRANSCRIPT', payload: updatedItem });
+          try {
+            if (dataConnRef.current && dataConnRef.current.open) {
+               dataConnRef.current.send({ type: 'TRANSCRIPT', payload: updatedItem });
+            }
+          } catch (err) {
+            console.error("Failed to send transcript", err);
           }
 
           const newList = [...prev];
@@ -225,7 +230,7 @@ const App: React.FC = () => {
        } else {
           // New transcript item
           const newItem: TranscriptionItem = { 
-            id, 
+            id: tempId,
             sender: 'local', 
             text, 
             isFinal, 
@@ -233,14 +238,18 @@ const App: React.FC = () => {
           };
 
           // Send to Peer
-          if (dataConnRef.current && dataConnRef.current.open) {
-             dataConnRef.current.send({ type: 'TRANSCRIPT', payload: newItem });
+          try {
+            if (dataConnRef.current && dataConnRef.current.open) {
+               dataConnRef.current.send({ type: 'TRANSCRIPT', payload: newItem });
+            }
+          } catch (err) {
+            console.error("Failed to send transcript", err);
           }
 
           return [...prev, newItem];
        }
     });
-  };
+  }, []);
 
   const toggleMic = () => {
     if (localStreamRef.current) {

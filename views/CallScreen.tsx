@@ -59,14 +59,24 @@ export const CallScreen: React.FC<CallScreenProps> = ({
   const [isTranslateOn, setIsTranslateOn] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const speechService = useRef<SpeechService | null>(null);
+  
+  // Use a ref to keep the latest callback available to SpeechService
+  const onLocalSpeechRef = useRef(onLocalSpeech);
+
+  useEffect(() => {
+    onLocalSpeechRef.current = onLocalSpeech;
+  }, [onLocalSpeech]);
 
   useEffect(() => {
     // Initialize Speech Recognition
     speechService.current = new SpeechService(
       (text, isFinal) => {
-        onLocalSpeech(text, isFinal);
+        // Always call the latest version of the function
+        if (onLocalSpeechRef.current) {
+            onLocalSpeechRef.current(text, isFinal);
+        }
       },
-      (error) => console.warn(error)
+      (error) => console.warn("Speech Recognition Warning:", error)
     );
 
     speechService.current.start();
@@ -74,7 +84,7 @@ export const CallScreen: React.FC<CallScreenProps> = ({
     return () => {
       speechService.current?.stop();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-scroll to bottom of transcripts
   useEffect(() => {
