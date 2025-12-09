@@ -9,16 +9,18 @@ import { PermissionService } from './services/permissionService';
 // Connection Status Type
 type ConnectionStatus = 'Disconnected' | 'Connecting' | 'Connected';
 
-// CRITICAL: TURN + STUN Servers for Maximum Cross-Network Compatibility
+// CRITICAL: Multiple TURN + STUN Servers for Maximum Compatibility
 const PEER_CONFIG = {
   config: {
     iceServers: [
-      // STUN servers (for IP discovery)
+      // Google STUN servers
+      { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
 
-      // TURN servers (for relaying traffic when direct connection fails)
-      // Free public TURN servers from metered.ca
+      // Free TURN servers - Option 1: OpenRelay (Metered)
       {
         urls: 'turn:openrelay.metered.ca:80',
         username: 'openrelayproject',
@@ -33,10 +35,32 @@ const PEER_CONFIG = {
         urls: 'turn:openrelay.metered.ca:443?transport=tcp',
         username: 'openrelayproject',
         credential: 'openrelayproject'
+      },
+
+      // Free TURN servers - Option 2: Twilio STUN/TURN
+      { urls: 'stun:global.stun.twilio.com:3478' },
+
+      // Free TURN servers - Option 3: Additional fallbacks
+      {
+        urls: 'turn:relay.metered.ca:80',
+        username: 'e46a88927fb974bd3633df64',
+        credential: 'MYDQbvLnDu7TD1P7'
+      },
+      {
+        urls: 'turn:relay.metered.ca:443',
+        username: 'e46a88927fb974bd3633df64',
+        credential: 'MYDQbvLnDu7TD1P7'
+      },
+      {
+        urls: 'turn:relay.metered.ca:443?transport=tcp',
+        username: 'e46a88927fb974bd3633df64',
+        credential: 'MYDQbvLnDu7TD1P7'
       }
     ],
-    iceTransportPolicy: 'all' // Try direct connection first, fallback to TURN
-  }
+    iceTransportPolicy: 'all', // Try all methods (direct + TURN)
+    iceCandidatePoolSize: 10 // Pre-gather more candidates for faster connection
+  },
+  debug: 3 // Enable maximum debug logging
 };
 
 const App: React.FC = () => {
@@ -60,6 +84,9 @@ const App: React.FC = () => {
 
   // Speech recognition availability
   const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(true);
+
+  // Connection quality info
+  const [connectionInfo, setConnectionInfo] = useState<string>('');
 
   // Refs for WebRTC management
   const peerRef = useRef<Peer | null>(null);
@@ -89,6 +116,23 @@ const App: React.FC = () => {
       cleanupConnection();
     };
   }, []);
+
+  // Log ICE candidates for debugging
+  const logIceCandidate = (candidate: any) => {
+    if (candidate?.candidate) {
+      const candidateStr = candidate.candidate;
+      if (candidateStr.includes('typ relay')) {
+        console.log('✅ TURN relay candidate:', candidateStr);
+        setConnectionInfo('Using TURN relay (slower but works across networks)');
+      } else if (candidateStr.includes('typ srflx')) {
+        console.log('📡 STUN reflexive candidate:', candidateStr);
+        setConnectionInfo('Using STUN (medium speed)');
+      } else if (candidateStr.includes('typ host')) {
+        console.log('🏠 Host candidate:', candidateStr);
+        setConnectionInfo('Direct connection (fastest)');
+      }
+    }
+  };
 
   // Initialize Speech Recognition
   const initSpeechRecognition = useCallback(() => {
@@ -172,14 +216,15 @@ const App: React.FC = () => {
   const joinAudio = () => {
     if (remoteAudioRef.current && remoteStreamRef.current) {
       remoteAudioRef.current.srcObject = remoteStreamRef.current;
+      remoteAudioRef.current.volume = 1.0; // Ensure full volume
       remoteAudioRef.current.play()
         .then(() => {
           setAudioJoined(true);
-          console.log('Audio playback started successfully');
+          console.log('✅ Audio playback started successfully');
         })
         .catch(e => {
-          console.error('Audio play failed:', e);
-          alert('Failed to play audio. Please try again.');
+          console.error('❌ Audio play failed:', e);
+          alert('Failed to play audio. Please check browser permissions.');
         });
     }
   };
@@ -207,6 +252,7 @@ const App: React.FC = () => {
     remoteStreamRef.current = null;
     setConnectionStatus('Disconnected');
     setAudioJoined(false);
+    setConnectionInfo('');
   };
 
   const endCall = () => {
@@ -224,6 +270,7 @@ const App: React.FC = () => {
     setIsSpeaking(false);
     setConnectionStatus('Disconnected');
     setAudioJoined(false);
+    setConnectionInfo('');
   };
 
   // Setup DataConnection for text sync between peers
@@ -231,12 +278,12 @@ const App: React.FC = () => {
     dataConnRef.current = conn;
 
     conn.on('open', () => {
-      console.log('Data connection established with:', conn.peer);
+      console.log('✅ Data connection established with:', conn.peer);
       setConnectionStatus('Connected');
     });
 
     conn.on('data', (data: any) => {
-      console.log('Received data:', data);
+      console.log('📨 Received data:', data);
       // Received text from peer
       if (data && data.text) {
         setLiveCaption(`Peer: ${data.text}`);
@@ -244,8 +291,12 @@ const App: React.FC = () => {
     });
 
     conn.on('close', () => {
-      console.log('Data connection closed');
+      console.log('❌ Data connection closed');
       setConnectionStatus('Disconnected');
+    });
+
+    conn.on('error', (err) => {
+      console.error('❌ Data connection error:', err);
     });
   };
 
@@ -257,12 +308,14 @@ const App: React.FC = () => {
     }
     localStreamRef.current = permission.stream;
 
-    // Initialize Peer with TURN + STUN Config for maximum cross-network connectivity
+    console.log('🎤 Local stream obtained:', localStreamRef.current.getTracks());
+
+    // Initialize Peer with enhanced TURN + STUN Config
     const peer = new Peer(id ? id : undefined, PEER_CONFIG);
     peerRef.current = peer;
 
     peer.on('error', (err) => {
-      console.error('Peer Error:', err);
+      console.error('❌ Peer Error:', err);
       setStatusText(`Connection Error: ${err.type}`);
       setConnectionStatus('Disconnected');
       if (err.type === 'peer-unavailable') {
@@ -273,7 +326,7 @@ const App: React.FC = () => {
 
     // Listen for incoming data connections
     peer.on('connection', (conn) => {
-      console.log("Incoming data connection from:", conn.peer);
+      console.log("📞 Incoming data connection from:", conn.peer);
       setupDataConnection(conn);
     });
 
@@ -292,6 +345,7 @@ const App: React.FC = () => {
       const peer = await initializePeer(newId);
 
       peer.on('open', (id) => {
+        console.log('✅ Peer opened as HOST with ID:', id);
         setChannelId(id);
         setAppState(AppState.WAITING_FOR_PEER);
         setStatusText("Waiting for Guest...");
@@ -299,15 +353,19 @@ const App: React.FC = () => {
 
       // Handle Incoming Audio Call
       peer.on('call', (call) => {
+        console.log('📞 Incoming call from:', call.peer);
         setStatusText("Incoming Call...");
         setConnectionStatus('Connecting');
-        // CRITICAL: Answer the call with local stream
+
+        // Answer with local stream
         call.answer(localStreamRef.current!);
+        console.log('✅ Answered call with local stream');
+
         handleMediaStream(call);
       });
 
     } catch (e) {
-      console.error(e);
+      console.error('❌ Host creation failed:', e);
       setAppState(AppState.LANDING);
       setConnectionStatus('Disconnected');
     }
@@ -324,19 +382,22 @@ const App: React.FC = () => {
       const peer = await initializePeer();
 
       peer.on('open', () => {
+        console.log('✅ Peer opened as GUEST');
         setStatusText("Handshaking...");
 
         // 1. Start Data Connection First
         const conn = peer.connect(targetId, { reliable: true });
+        console.log('📡 Initiating data connection to:', targetId);
         setupDataConnection(conn);
 
         // 2. Start Audio Call
+        console.log('📞 Calling host with local stream...');
         const call = peer.call(targetId, localStreamRef.current!);
         handleMediaStream(call);
       });
 
     } catch (e) {
-      console.error(e);
+      console.error('❌ Guest join failed:', e);
       setAppState(AppState.LANDING);
       setConnectionStatus('Disconnected');
     }
@@ -346,20 +407,26 @@ const App: React.FC = () => {
   const handleMediaStream = (call: MediaConnection) => {
     activeCallRef.current = call;
 
-    call.on('stream', (remoteStream) => {
-      console.log('Received remote stream');
+    // Log ICE candidates for debugging
+    call.peerConnection.addEventListener('icecandidate', (event) => {
+      logIceCandidate(event.candidate);
+    });
 
-      // Enable all tracks
+    call.on('stream', (remoteStream) => {
+      console.log('✅ Received remote stream:', remoteStream);
+      console.log('🔊 Remote audio tracks:', remoteStream.getAudioTracks());
+
+      // Enable all tracks explicitly
       remoteStream.getTracks().forEach(track => {
         track.enabled = true;
-        console.log(`Track enabled: ${track.kind}, ${track.label}`);
+        console.log(`✅ Enabled track: ${track.kind}, label: ${track.label}, enabled: ${track.enabled}`);
       });
 
       // Store stream but DON'T play yet (autoplay policy compliance)
       remoteStreamRef.current = remoteStream;
 
       setAppState(AppState.ACTIVE_CALL);
-      setStatusText("Connected - Click Join Audio");
+      setStatusText("Connected - Click Join Audio to hear");
       setConnectionStatus('Connected');
 
       // Initialize speech recognition when call becomes active
@@ -367,8 +434,12 @@ const App: React.FC = () => {
     });
 
     call.on('close', () => {
-      console.log('Call closed');
+      console.log('❌ Call closed');
       endCall();
+    });
+
+    call.on('error', (err) => {
+      console.error('❌ Call error:', err);
     });
   };
 
@@ -378,6 +449,7 @@ const App: React.FC = () => {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMicMuted(!audioTrack.enabled);
+        console.log(`🎤 Microphone ${audioTrack.enabled ? 'unmuted' : 'muted'}`);
       }
     }
   };
@@ -456,32 +528,41 @@ const App: React.FC = () => {
       {appState === AppState.ACTIVE_CALL && (
         <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black flex flex-col">
           {/* Top: Status Badge & Channel Info */}
-          <div className="p-6 flex flex-col md:flex-row justify-between items-center gap-4 border-b border-white/10 bg-black/50 backdrop-blur-sm">
-            <div className="flex items-center gap-4">
-              {getStatusBadge()}
-              <div className="text-sm font-mono text-gray-400">
-                Channel: <span className="text-blue-500 font-bold">{channelId}</span>
+          <div className="p-4 flex flex-col gap-3 border-b border-white/10 bg-black/50 backdrop-blur-sm">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                {getStatusBadge()}
+                <div className="text-sm font-mono text-gray-400">
+                  Channel: <span className="text-blue-500 font-bold">{channelId}</span>
+                </div>
               </div>
+
+              {/* Speech Recognition Alert */}
+              {!speechRecognitionSupported && (
+                <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/20 border border-red-500">
+                  <AlertTriangle className="w-4 h-4 text-red-500" />
+                  <span className="text-red-500 text-sm font-bold">Speech Recognition Not Supported</span>
+                </div>
+              )}
             </div>
 
-            {/* Speech Recognition Alert */}
-            {!speechRecognitionSupported && (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/20 border border-red-500">
-                <AlertTriangle className="w-4 h-4 text-red-500" />
-                <span className="text-red-500 text-sm font-bold">Speech Recognition Not Supported</span>
+            {/* Connection Quality Info */}
+            {connectionInfo && (
+              <div className="text-xs font-mono text-gray-500 bg-gray-900/50 px-3 py-2 rounded border border-gray-700">
+                ℹ️ {connectionInfo}
               </div>
             )}
           </div>
 
           {/* Join Audio Button (Appears before audio is joined) */}
           {!audioJoined && remoteStreamRef.current && (
-            <div className="p-6 flex justify-center">
+            <div className="p-6 flex justify-center animate-pulse">
               <button
                 onClick={joinAudio}
                 className="px-8 py-4 rounded-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-lg flex items-center gap-3 shadow-lg shadow-blue-500/50 transition-all active:scale-95"
               >
                 <Volume2 className="w-6 h-6" />
-                🔊 Join Audio
+                🔊 JOIN AUDIO (CLICK TO HEAR)
               </button>
             </div>
           )}
