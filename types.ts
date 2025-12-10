@@ -28,3 +28,11 @@ export interface TranscriptionItem {
   isFinal: boolean;
   timestamp: number;
 }
+
+export interface ChatMessage {
+  id: string;
+  sender: 'me' | 'peer';
+  text: string;
+  translatedText?: string;
+  timestamp: number;
+}

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Peer, MediaConnection, DataConnection } from 'peerjs';
-import { Mic, MicOff, PhoneOff, Volume2, AlertTriangle } from 'lucide-react';
-import { AppState } from './types';
+import { Mic, MicOff, PhoneOff, Volume2, AlertTriangle, Languages } from 'lucide-react';
+import { AppState, ChatMessage } from './types';
 import { LandingScreen } from './views/LandingScreen';
 import { SummaryScreen } from './views/SummaryScreen';
 import { PermissionService } from './services/permissionService';
+import { TranslationService, LANGUAGES, LanguageCode } from './services/translationService';
 
 // Connection Status Type
 type ConnectionStatus = 'Disconnected' | 'Connecting' | 'Connected';
@@ -34,6 +35,17 @@ const App: React.FC = () => {
   // Connection quality info
   const [connectionInfo, setConnectionInfo] = useState<string>('');
 
+  // Chat messages history
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  // Translation settings
+  const [translationEnabled, setTranslationEnabled] = useState(false);
+  const [targetLanguage, setTargetLanguage] = useState<LanguageCode>('ur');
+  const [sourceLanguage, setSourceLanguage] = useState<LanguageCode>('en');
+
+  // Chat scroll ref
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
   // Refs for WebRTC management
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -62,6 +74,13 @@ const App: React.FC = () => {
       cleanupConnection();
     };
   }, []);
+
+  // Auto-scroll chat when new messages arrive
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
 
   // Log ICE candidates for debugging
   const logIceCandidate = (candidate: any) => {
@@ -93,17 +112,46 @@ const App: React.FC = () => {
     recognition.interimResults = true;
     recognition.lang = 'en-US';
 
-    recognition.onresult = (event: any) => {
+    recognition.onresult = async (event: any) => {
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
           let transcript = event.results[i][0].transcript.trim();
           if (transcript) {
+            // Create new message
+            const newMessage: ChatMessage = {
+              id: `me-${Date.now()}`,
+              sender: 'me',
+              text: transcript,
+              timestamp: Date.now(),
+            };
+
+            // Add to messages
+            setMessages(prev => [...prev, newMessage]);
+
             // Update live caption
             setLiveCaption(`Me: ${transcript}`);
 
             // Send to peer via DataConnection
             if (dataConnRef.current?.open) {
-              dataConnRef.current.send({ text: transcript });
+              dataConnRef.current.send({ text: transcript, type: 'message' });
+            }
+
+            // Translate if enabled
+            if (translationEnabled) {
+              const result = await TranslationService.translate(
+                transcript,
+                sourceLanguage,
+                targetLanguage
+              );
+              if (result.success) {
+                setMessages(prev =>
+                  prev.map(m =>
+                    m.id === newMessage.id
+                      ? { ...m, translatedText: result.translatedText }
+                      : m
+                  )
+                );
+              }
             }
           }
         }
@@ -228,11 +276,38 @@ const App: React.FC = () => {
       setConnectionStatus('Connected');
     });
 
-    conn.on('data', (data: any) => {
+    conn.on('data', async (data: any) => {
       console.log('📨 Received data:', data);
       // Received text from peer
       if (data && data.text) {
+        const peerMessage: ChatMessage = {
+          id: `peer-${Date.now()}`,
+          sender: 'peer',
+          text: data.text,
+          timestamp: Date.now(),
+        };
+
+        // Add to messages
+        setMessages(prev => [...prev, peerMessage]);
         setLiveCaption(`Peer: ${data.text}`);
+
+        // Translate if enabled
+        if (translationEnabled) {
+          const result = await TranslationService.translate(
+            data.text,
+            sourceLanguage,
+            targetLanguage
+          );
+          if (result.success) {
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === peerMessage.id
+                  ? { ...m, translatedText: result.translatedText }
+                  : m
+              )
+            );
+          }
+        }
       }
     });
 
@@ -676,20 +751,98 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Bottom: Live Captions Subtitle Box */}
-          <div className="p-6 bg-black/70 border-t border-white/10 backdrop-blur-sm">
-            <div className="max-w-4xl mx-auto">
-              <p className="text-xs font-mono text-gray-500 mb-2 uppercase tracking-widest text-center">Live Captions</p>
-              <div className="bg-gray-900/80 rounded-xl p-6 border border-gray-700 min-h-[80px] flex items-center justify-center">
-                <p className="text-lg text-gray-200 leading-relaxed text-center">{liveCaption}</p>
+          {/* Bottom: Chat Messages (Message App Style) */}
+          <div className="flex-1 flex flex-col bg-black/50 border-t border-white/10 min-h-[300px] max-h-[50vh]">
+            {/* Translation Controls */}
+            <div className="p-3 flex flex-wrap items-center justify-between gap-3 border-b border-white/5 bg-black/30">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setTranslationEnabled(!translationEnabled)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${translationEnabled
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    }`}
+                >
+                  <Languages className="w-4 h-4" />
+                  {translationEnabled ? 'Translation ON' : 'Translate'}
+                </button>
+
+                {translationEnabled && (
+                  <div className="flex items-center gap-2 text-sm">
+                    <select
+                      value={sourceLanguage}
+                      onChange={(e) => setSourceLanguage(e.target.value as LanguageCode)}
+                      className="bg-gray-800 text-white px-3 py-2 rounded-lg border border-gray-700 text-sm"
+                    >
+                      {Object.entries(LANGUAGES).map(([code, name]) => (
+                        <option key={code} value={code}>{name}</option>
+                      ))}
+                    </select>
+                    <span className="text-gray-500">→</span>
+                    <select
+                      value={targetLanguage}
+                      onChange={(e) => setTargetLanguage(e.target.value as LanguageCode)}
+                      className="bg-gray-800 text-white px-3 py-2 rounded-lg border border-gray-700 text-sm"
+                    >
+                      {Object.entries(LANGUAGES).map(([code, name]) => (
+                        <option key={code} value={code}>{name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
+
+              <div className="text-xs font-mono text-gray-500">
+                {messages.length} messages
+              </div>
+            </div>
+
+            {/* Chat Messages */}
+            <div
+              ref={chatContainerRef}
+              className="flex-1 overflow-y-auto p-4 space-y-3"
+            >
+              {messages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-gray-600">
+                  <p className="text-sm font-mono">Start captioning to see messages...</p>
+                </div>
+              ) : (
+                messages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`flex ${msg.sender === 'me' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[80%] rounded-2xl px-4 py-3 ${msg.sender === 'me'
+                        ? 'bg-blue-600 text-white rounded-br-sm'
+                        : 'bg-gray-700 text-gray-100 rounded-bl-sm'
+                        }`}
+                    >
+                      <div className="text-[10px] font-mono opacity-60 mb-1">
+                        {msg.sender === 'me' ? 'YOU' : 'PEER'}
+                      </div>
+                      <p className="text-sm leading-relaxed">{msg.text}</p>
+
+                      {/* Translation */}
+                      {msg.translatedText && (
+                        <div className="mt-2 pt-2 border-t border-white/20">
+                          <p className="text-xs opacity-70">🌐 {LANGUAGES[targetLanguage]}:</p>
+                          <p className="text-sm" dir={targetLanguage === 'ur' || targetLanguage === 'ar' ? 'rtl' : 'ltr'}>
+                            {msg.translatedText}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
       )}
 
       {appState === AppState.SUMMARY_VIEW && (
-        <SummaryScreen onBack={resetToHub} />
+        <SummaryScreen onBack={resetToHub} messages={messages} />
       )}
     </div>
   );
