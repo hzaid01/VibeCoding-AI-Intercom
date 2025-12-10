@@ -8,11 +8,6 @@ export enum AppState {
   SUMMARY_VIEW = 'SUMMARY_VIEW',
 }
 
-export enum AppRole {
-  TRANSMITTER = 'TRANSMITTER',
-  RECEIVER = 'RECEIVER',
-}
-
 export interface CallMetrics {
   duration: number; // in seconds
   status: 'secure' | 'connecting' | 'failed';

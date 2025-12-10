@@ -9,60 +9,6 @@ import { PermissionService } from './services/permissionService';
 // Connection Status Type
 type ConnectionStatus = 'Disconnected' | 'Connecting' | 'Connected';
 
-// CRITICAL: Multiple TURN + STUN Servers for Maximum Compatibility
-const PEER_CONFIG = {
-  config: {
-    iceServers: [
-      // Google STUN servers
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun4.l.google.com:19302' },
-
-      // DEDICATED TURN servers (User's Personal Metered.ca Account - 20GB/month)
-      {
-        urls: 'turn:hzaid01.metered.live:80',
-        username: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5',
-        credential: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5'
-      },
-      {
-        urls: 'turn:hzaid01.metered.live:443',
-        username: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5',
-        credential: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5'
-      },
-      {
-        urls: 'turn:hzaid01.metered.live:443?transport=tcp',
-        username: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5',
-        credential: 'gtRr_dLWdnqDx0pj0lNjhC-kofxQ-CbXJ1-YukNqhajQnuK5'
-      },
-
-      // Free TURN servers - Option 2: Twilio STUN/TURN
-      { urls: 'stun:global.stun.twilio.com:3478' },
-
-      // Free TURN servers - Option 3: Additional fallbacks
-      {
-        urls: 'turn:relay.metered.ca:80',
-        username: 'e46a88927fb974bd3633df64',
-        credential: 'MYDQbvLnDu7TD1P7'
-      },
-      {
-        urls: 'turn:relay.metered.ca:443',
-        username: 'e46a88927fb974bd3633df64',
-        credential: 'MYDQbvLnDu7TD1P7'
-      },
-      {
-        urls: 'turn:relay.metered.ca:443?transport=tcp',
-        username: 'e46a88927fb974bd3633df64',
-        credential: 'MYDQbvLnDu7TD1P7'
-      }
-    ],
-    iceTransportPolicy: 'all', // Try all methods (direct + TURN)
-    iceCandidatePoolSize: 10 // Pre-gather more candidates for faster connection
-  },
-  debug: 3 // Enable maximum debug logging
-};
-
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.LANDING);
   const [channelId, setChannelId] = useState<string>('');
